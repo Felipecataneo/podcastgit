@@ -5,3 +5,4 @@ python-dotenv
 gTTS
 tqdm
 Pillow
+pydub

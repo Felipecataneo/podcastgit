@@ -12,6 +12,7 @@ import io
 import google.generativeai as genai
 from gtts import gTTS
 from dotenv import load_dotenv
+from pydub import AudioSegment
 
 # Carrega variáveis de ambiente do .env (se existir)
 load_dotenv()
@@ -509,32 +510,121 @@ class GitHubPodcastGenerator:
         Repositório: {self.repo_url}
         """
 
-    def generate_podcast_audio(self, script_text, lang='pt-br', progress_callback=None):
-        """Gera o áudio do podcast a partir do script usando gTTS."""
-        self._log_message("Gerando áudio do podcast...", "info")
+    def generate_podcast_audio(self, script_text, lang='pt-br', vignette_path="background_music.mp3", vignette_duration_ms=5000, progress_callback=None):
+        """
+        Gera o áudio do podcast, inserindo uma vinheta musical curta
+        nos locais indicados por marcadores no script.
+
+        Args:
+            script_text (str): O roteiro completo gerado pela IA.
+            lang (str): Idioma para o gTTS.
+            vignette_path (str): Caminho para o arquivo de música da vinheta.
+            vignette_duration_ms (int): Duração desejada da vinheta em milissegundos.
+            progress_callback (callable, optional): Função para reportar progresso.
+
+        Returns:
+            io.BytesIO or None: Buffer de bytes com o áudio MP3 final ou None em caso de erro.
+        """
+        self._log_message("Preparando áudio do podcast com vinhetas...", "info")
         if progress_callback:
-            progress_callback(0.95, "Sintetizando áudio...")
+            progress_callback(0.95, "Carregando vinheta e processando roteiro...")
+
+        # --- Carregar e preparar a vinheta ---
+        try:
+            vignette_full = AudioSegment.from_mp3(vignette_path)
+            # Pega apenas o início da música para a vinheta
+            vignette = vignette_full[:vignette_duration_ms]
+            # Adiciona um pequeno fade out no final da vinheta (opcional, mas bom)
+            vignette = vignette.fade_out(duration=min(500, vignette_duration_ms // 4)) # Fade out de 0.5s ou 1/4 da duração
+            self._log_message(f"Vinheta '{vignette_path}' carregada e cortada para {len(vignette)/1000:.1f}s.", "info")
+        except FileNotFoundError:
+            self._log_message(f"Arquivo de vinheta '{vignette_path}' não encontrado. Não será possível adicionar vinhetas.", "error")
+            # Poderíamos prosseguir sem vinhetas, mas vamos parar para indicar o erro claramente.
+            # return self._generate_audio_without_vignettes(script_text, lang, progress_callback) # Função alternativa (não implementada aqui)
+            return None
+        except Exception as e:
+            self._log_message(f"Erro ao carregar ou processar vinheta '{vignette_path}': {e}. Verifique o arquivo e a instalação do ffmpeg.", "error")
+            return None
+
+        # --- Processar o roteiro e gerar áudio ---
+        final_segments = []
+        # Marcadores que indicam onde inserir a vinheta
+        vignette_markers = [
+            '[VINHETA DE ABERTURA]',
+            '[MÚSICA SUAVE DE FUNDO]',
+            '[SECTION BREAK]',
+            '[VINHETA DE ENCERRAMENTO]'
+        ]
+        # Regex para dividir o script mantendo os delimitadores (marcadores)
+        # Adiciona parênteses ao redor do padrão para capturá-lo no split
+        marker_pattern = r'(' + '|'.join(re.escape(m) for m in vignette_markers) + r')'
+        parts = [p.strip() for p in re.split(marker_pattern, script_text) if p and p.strip()]
+
+        if not parts:
+             self._log_message("Roteiro vazio ou sem partes reconhecíveis após divisão.", "error")
+             return None
+
+        total_parts = len(parts)
+        processed_parts = 0
 
         try:
-            # Remove marcadores como [VINHETA...] para não serem lidos
-            text_to_speak = re.sub(r'\[.*?\]', '', script_text)
-            # Remove linhas de metadados no final
-            text_to_speak = re.sub(r'---\n.*', '', text_to_speak, flags=re.DOTALL).strip()
+            for part in parts:
+                processed_parts += 1
+                current_progress = 0.95 + (0.04 * (processed_parts / total_parts)) # Progresso entre 95% e 99%
+                if progress_callback:
+                     progress_callback(current_progress, f"Processando parte {processed_parts}/{total_parts}...")
 
-            tts = gTTS(text=text_to_speak, lang=lang, slow=False)
+                is_marker = part in vignette_markers
 
-            # Salva o áudio em um buffer de bytes na memória
-            audio_fp = io.BytesIO()
-            tts.write_to_fp(audio_fp)
-            audio_fp.seek(0) # Volta para o início do buffer para leitura
+                if is_marker:
+                    self._log_message(f"Adicionando vinheta para o marcador: {part}", "info")
+                    final_segments.append(vignette)
+                else: # É um bloco de texto
+                    # Limpar o texto para o TTS
+                    text_to_speak = re.sub(r'^\s*(LOCUTOR:|HOST:)\s*', '', part, flags=re.MULTILINE)
+                    text_to_speak = re.sub(r'`', '', text_to_speak)
+                    text_to_speak = "\n".join(line for line in text_to_speak.splitlines() if line.strip())
 
-            self._log_message("Áudio gerado com sucesso!", "success")
+                    if text_to_speak: # Só gera áudio se houver texto após limpar
+                        self._log_message(f"Gerando fala para: '{textwrap.shorten(text_to_speak, 50)}...'", "info")
+                        try:
+                            tts = gTTS(text=text_to_speak, lang=lang, slow=False)
+                            speech_fp = io.BytesIO()
+                            tts.write_to_fp(speech_fp)
+                            speech_fp.seek(0)
+
+                            speech_segment = AudioSegment.from_mp3(speech_fp)
+                            final_segments.append(speech_segment)
+                            self._log_message(f"Segmento de fala gerado ({len(speech_segment)/1000:.1f}s).", "info")
+
+                        except Exception as e_tts:
+                            self._log_message(f"Erro ao gerar fala para um segmento com gTTS ou pydub: {e_tts}", "warning")
+                            # Decide se continua sem este segmento ou para
+                            continue # Pula este segmento de fala em caso de erro
+
+            # --- Combinar todos os segmentos ---
+            if not final_segments:
+                self._log_message("Nenhum segmento de áudio foi gerado.", "error")
+                return None
+
+            self._log_message("Combinando segmentos de fala e vinhetas...", "info")
+            # Inicia com um segmento vazio para usar o operador +
+            combined_audio = AudioSegment.empty()
+            for segment in final_segments:
+                 combined_audio += segment
+
+            # --- Exportar o áudio final ---
+            final_audio_fp = io.BytesIO()
+            combined_audio.export(final_audio_fp, format="mp3")
+            final_audio_fp.seek(0)
+
+            self._log_message(f"Áudio final com vinhetas gerado com sucesso! Duração total: {len(combined_audio)/1000:.1f}s", "success")
             if progress_callback:
                  progress_callback(1.0, "Podcast pronto!")
-            return audio_fp
+            return final_audio_fp
 
         except Exception as e:
-            self._log_message(f"Erro ao gerar áudio com gTTS: {e}", "error")
-            if "403 (Forbidden)" in str(e):
-                 self._log_message("Erro 403 no gTTS: Possível excesso de requisições. Tente novamente mais tarde.", "error")
+            self._log_message(f"Erro inesperado durante a concatenação de áudio: {e}", "error")
+            import traceback
+            self._log_message(traceback.format_exc(), "error")
             return None

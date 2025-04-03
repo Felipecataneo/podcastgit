@@ -132,16 +132,24 @@ if st.sidebar.button("Gerar Podcast!", use_container_width=True, type="primary")
                       st.stop()
                  update_progress(0.9, "Roteiro gerado!")
 
-            with st.spinner("Gerando áudio do podcast..."):
-                 podcast_audio_bytes = generator.generate_podcast_audio(podcast_script, progress_callback=update_progress)
+            with st.spinner("Gerando áudio do podcast com vinhetas..."):
+                 # A chamada continua simples, mas agora passará pelos novos parâmetros padrão
+                 # ou você pode adicionar inputs para vignette_path e vignette_duration_ms
+                 podcast_audio_bytes = generator.generate_podcast_audio(
+                     podcast_script,
+                     # vignette_path=st.session_state.get('vignette_file_path', 'background_music.mp3'), # Exemplo se tivesse upload
+                     # vignette_duration_ms=st.session_state.get('vignette_duration', 5000), # Exemplo se tivesse input
+                     progress_callback=update_progress
+                 )
+
                  if not podcast_audio_bytes:
-                     st.error("Falha ao gerar o áudio do podcast. Verifique os logs e tente novamente.")
-                     log_area.text("\n".join(log_messages)) # Mostra logs acumulados
+                     st.error("Falha ao gerar o áudio do podcast com vinhetas. Verifique os logs.")
+                     log_area.text("\n".join(log_messages))
+                     st.info("ℹ️ Dica: Verifique se o arquivo de música para a vinheta existe (`background_music.mp3` por padrão) e se o `ffmpeg` está instalado.")
                      st.stop()
 
             # --- Exibe os Resultados ---
             st.success("Podcast gerado com sucesso! 🎉")
-
             # Nome do arquivo para download
             safe_repo_name = re.sub(r'[^\w\-]+', '_', generator.repo_name)
             audio_filename = f"{safe_repo_name}_podcast.mp3"
