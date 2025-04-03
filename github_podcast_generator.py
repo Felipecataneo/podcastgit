@@ -21,6 +21,7 @@ class GitHubPodcastGenerator:
     """
     Ferramenta para gerar podcasts didáticos em áudio explicando repositórios do GitHub,
     focando em desenvolvedores juniores, usando a API Gemini e gTTS.
+    Versão adaptada para um modelo hipotético de contexto longo (ex: 1M tokens).
     """
 
     def __init__(self, gemini_api_key=None, github_token=None):
@@ -36,16 +37,20 @@ class GitHubPodcastGenerator:
 
         if not self.gemini_api_key:
             print("⚠️ Nenhuma chave da API Gemini encontrada. A geração do script falhará.")
-            # Poderíamos lançar um erro aqui, mas vamos permitir continuar para a interface mostrar a mensagem
-            # raise ValueError("API Key da Gemini não encontrada. Defina a variável de ambiente GOOGLE_API_KEY ou passe via parâmetro.")
+            # Lançar um erro pode ser melhor em produção, mas deixamos seguir para a UI mostrar
+            # raise ValueError("API Key da Gemini não encontrada.")
         else:
-             try:
+            try:
                 genai.configure(api_key=self.gemini_api_key)
                 print("✓ API Gemini configurada.")
-             except Exception as e:
-                 print(f"Erro ao configurar a API Gemini: {e}")
-                 self.gemini_api_key = None # Invalida a chave se a configuração falhar
+            except Exception as e:
+                print(f"Erro ao configurar a API Gemini: {e}")
+                self.gemini_api_key = None # Invalida se falhar
 
+        # --- ALTERAÇÃO: Nome do modelo hipotético ---
+        self.gemini_model_name = 'gemini-2.5-pro-exp-03-25' # ATENÇÃO: Modelo hipotético/experimental!
+        self._log_message(f"Usando modelo Gemini: {self.gemini_model_name}", "warning")
+        # ----------------------------------------------
 
         self.headers = {}
         if self.github_token:
@@ -57,42 +62,47 @@ class GitHubPodcastGenerator:
         # Detalhes do repositório
         self.repo_owner = None
         self.repo_name = None
-        self.branch = "main" # Default branch
+        self.branch = "main"
         self.repo_url = None
 
-        # Extensões de código a analisar (pode ser customizado)
-        self.code_extensions = ['.py', '.js', '.html', '.css', '.java', '.cpp', '.c', '.h', '.go', '.rb', '.php', '.ts', '.jsx', '.tsx', '.ipynb', '.sh', '.md'] # Adicionado .md para README
+        # Extensões de código a analisar
+        self.code_extensions = ['.py', '.js', '.html', '.css', '.java', '.cpp', '.c', '.h', '.go', '.rb', '.php', '.ts', '.jsx', '.tsx', '.ipynb', '.sh', '.md']
 
         # Armazena dados do repositório
         self.code_files = []
         self.readme_content = ""
         self.repo_summary = {}
         self.generation_config = genai.types.GenerationConfig(
-             # Only one candidate for now.
             candidate_count=1,
-            #stop_sequences=['x'],
-            #max_output_tokens=2048,
-            temperature=0.7) # Um pouco de criatividade
+            # max_output_tokens=8192, # Pode precisar aumentar para respostas mais longas
+            temperature=0.6 # Um pouco menos de criatividade para análises mais técnicas
+        )
 
-        # Configurações de segurança (ajuste conforme necessário)
+        # Configurações de segurança (manter ou ajustar conforme necessário)
         self.safety_settings={
-            # genai.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: genai.types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-            # genai.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH: genai.types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-            # genai.types.HarmCategory.HARM_CATEGORY_HARASSMENT: genai.types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-            # genai.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: genai.types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-             # Relaxando um pouco para código, mas pode precisar ajustar
-             genai.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: genai.types.HarmBlockThreshold.BLOCK_NONE,
-             genai.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH: genai.types.HarmBlockThreshold.BLOCK_NONE,
-             genai.types.HarmCategory.HARM_CATEGORY_HARASSMENT: genai.types.HarmBlockThreshold.BLOCK_NONE,
-             genai.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: genai.types.HarmBlockThreshold.BLOCK_NONE,
+            genai.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: genai.types.HarmBlockThreshold.BLOCK_NONE,
+            genai.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH: genai.types.HarmBlockThreshold.BLOCK_NONE,
+            genai.types.HarmCategory.HARM_CATEGORY_HARASSMENT: genai.types.HarmBlockThreshold.BLOCK_NONE,
+            genai.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: genai.types.HarmBlockThreshold.BLOCK_NONE,
         }
 
-        # Modelo Gemini a ser usado
-        self.gemini_model_name = 'gemini-1.5-flash' # Ou 'gemini-pro' ou outro modelo disponível
+        # --- NOVOS PARÂMETROS DE LIMITE (AUMENTADOS para modelo 1M tokens) ---
+        # Limite alto, mas evita repositórios GIGANTES travarem tudo só na leitura
+        self.max_files_to_read_content = 1000
+        # Limite alto por arquivo (ex: ~100k caracteres)
+        self.max_chars_per_file_read = 100000
+        # Limite para o README enviado à IA (ex: ~200k caracteres)
+        self.max_readme_chars_for_ai = 200000
+        # Limite TOTAL de caracteres de CÓDIGO a serem enviados à IA (ex: 3 Milhões)
+        # Deixa espaço para prompt, readme, lista de arquivos, resposta, etc., dentro dos ~4M totais de chars (1M tokens * ~4 chars/token).
+        self.max_total_code_chars_for_ai = 3000000
+        # Limite para a lista de nomes de arquivos enviada à IA
+        self.max_file_list_for_ai = 2000
+        # -------------------------------------------------------------------
 
 
     def _log_message(self, message, level="info"):
-        """Helper para logar mensagens (pode ser substituído por logging real)."""
+        """Helper para logar mensagens."""
         prefix = {"info": "ℹ️", "warning": "⚠️", "error": "❌", "success": "✅"}.get(level, "➡️")
         print(f"{prefix} {message}")
 
@@ -100,25 +110,20 @@ class GitHubPodcastGenerator:
         """Analisa a URL do GitHub para extrair proprietário, nome do repo e branch opcional."""
         try:
             parsed_url = urlparse(url)
-
             if "github.com" not in parsed_url.netloc:
                 raise ValueError("Não é uma URL válida do GitHub.")
-
             path_parts = parsed_url.path.strip('/').split('/')
-
             if len(path_parts) < 2:
                 raise ValueError("URL não contém um caminho de repositório válido.")
 
             self.repo_owner = path_parts[0]
-            self.repo_name = path_parts[1].replace('.git', '') # Remove .git se presente
-            self.repo_url = f"https://github.com/{self.repo_owner}/{self.repo_name}" # URL canônica
+            self.repo_name = path_parts[1].replace('.git', '')
+            self.repo_url = f"https://github.com/{self.repo_owner}/{self.repo_name}"
 
-            # Verifica se uma branch específica foi especificada (formato /tree/branch_name)
             if len(path_parts) > 3 and path_parts[2] == "tree":
                 self.branch = path_parts[3]
             else:
-                 # Tenta obter a branch padrão da API se não especificada
-                 self.branch = self._get_default_branch()
+                self.branch = self._get_default_branch()
 
             self._log_message(f"Repositório: {self.repo_owner}/{self.repo_name} (Branch: {self.branch})", "info")
             return True
@@ -136,21 +141,19 @@ class GitHubPodcastGenerator:
             response = requests.get(api_url, headers=self.headers)
             response.raise_for_status()
             repo_info = response.json()
-            default_branch = repo_info.get("default_branch", "main") # Usa 'main' como fallback
+            default_branch = repo_info.get("default_branch", "main")
             self._log_message(f"Branch padrão detectada: {default_branch}", "info")
             return default_branch
         except requests.RequestException as e:
             self._log_message(f"Não foi possível obter a branch padrão (usando 'main'): {e}", "warning")
-            return "main" # Retorna 'main' como fallback em caso de erro
+            return "main"
 
     def fetch_repo_structure(self, progress_callback=None):
-        """Busca a estrutura do repositório e arquivos importantes."""
-        self._log_message("Buscando estrutura do repositório...", "info")
+        """Busca a estrutura do repositório e arquivos importantes, com limites aumentados."""
+        self._log_message("Buscando estrutura do repositório (modo contexto amplo)...", "info")
         self.code_files = []
         self.readme_content = ""
 
-        # URL base da API para o conteúdo do repositório na branch correta
-        # Usa a API de Git Trees para buscar recursivamente (mais eficiente)
         api_url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/git/trees/{self.branch}?recursive=1"
 
         try:
@@ -159,56 +162,62 @@ class GitHubPodcastGenerator:
             tree_data = response.json()
 
             if tree_data.get("truncated"):
-                self._log_message("A árvore do repositório é muito grande e foi truncada. Analisando arquivos disponíveis.", "warning")
+                self._log_message("A árvore do repositório é muito grande e foi truncada pela API do GitHub. Analisando arquivos disponíveis.", "warning")
 
             total_items = len(tree_data.get("tree", []))
             processed_items = 0
+            files_content_read_count = 0 # Contador para o novo limite
 
-            # Usar tqdm se não houver callback de progresso (para CLI)
             items_iterable = tqdm(tree_data.get("tree", []), desc="Processando arquivos", unit="item", disable=progress_callback is not None)
 
             for item in items_iterable:
-                 processed_items += 1
-                 if progress_callback:
-                     progress_callback(processed_items / total_items if total_items > 0 else 0, f"Analisando: {item['path']}")
+                processed_items += 1
+                if progress_callback:
+                    progress_callback(processed_items / total_items if total_items > 0 else 0, f"Analisando: {item['path']}")
 
-                 if item["type"] == "blob": # 'blob' significa arquivo
+                if item["type"] == "blob": # Arquivo
                     file_path = item["path"]
                     file_name = os.path.basename(file_path)
                     _, ext = os.path.splitext(file_name)
+                    ext_lower = ext.lower()
 
                     # Processar README
                     if file_name.lower() == "readme.md":
                         content = self._fetch_file_content_by_sha(item["sha"], file_path)
                         if content:
-                            self.readme_content = content
-                            self._log_message(f"README.md encontrado e processado.", "info")
+                            self.readme_content = content # Limite de chars aplicado na leitura
+                            self._log_message(f"README.md encontrado e processado ({len(content)} chars).", "info")
 
-                    # Processar arquivos de código
-                    elif ext.lower() in self.code_extensions:
-                        # Otimização: buscar conteúdo apenas se necessário (pode ser feito depois pela IA)
-                        # Por agora, vamos buscar alguns para análise inicial
-                        # Poderíamos adicionar lógica para priorizar arquivos menores ou em diretórios raiz
-                        if len(self.code_files) < 50: # Limitar o número de arquivos para buscar conteúdo agora
+                    # Processar arquivos de código/texto relevantes
+                    elif ext_lower in self.code_extensions:
+                        file_info = {
+                            "path": file_path,
+                            "name": file_name,
+                            "extension": ext_lower,
+                            "sha": item["sha"],
+                            "content": None # Inicializa sem conteúdo
+                        }
+                        # --- ALTERAÇÃO: Lógica de leitura de conteúdo com limite maior ---
+                        if files_content_read_count < self.max_files_to_read_content:
+                            # Adiciona uma pausa maior para evitar rate limit com mais arquivos
+                            time.sleep(0.15)
                             content = self._fetch_file_content_by_sha(item["sha"], file_path)
                             if content:
-                                self.code_files.append({
-                                    "path": file_path,
-                                    "name": file_name,
-                                    "extension": ext.lower(),
-                                    "content": content # Guardar conteúdo para análise posterior
-                                })
-                        else:
-                             # Apenas listar arquivos se já temos muitos com conteúdo
-                              self.code_files.append({
-                                    "path": file_path,
-                                    "name": file_name,
-                                    "extension": ext.lower(),
-                                    "content": None # Indicar que o conteúdo não foi buscado
-                                })
+                                file_info["content"] = content # Limite de chars por arquivo aplicado na leitura
+                                files_content_read_count += 1
+                                if files_content_read_count % 50 == 0: # Log a cada 50 arquivos
+                                    self._log_message(f"Lido conteúdo de {files_content_read_count} arquivos...", "info")
 
+                        # Mesmo se não ler o conteúdo, adiciona à lista para ter o path
+                        self.code_files.append(file_info)
+                    # Ignorar outros tipos de arquivo para simplificar
 
-            self._log_message(f"Encontrados {len(self.code_files)} arquivos de código relevantes.", "info")
+            # --- ALTERAÇÃO: Log do limite ---
+            if files_content_read_count >= self.max_files_to_read_content:
+                 self._log_message(f"Limite de {self.max_files_to_read_content} arquivos com conteúdo lido atingido.", "warning")
+            self._log_message(f"Encontrados {len(self.code_files)} arquivos relevantes. Conteúdo lido para {files_content_read_count} arquivos.", "info")
+            # -------------------------------
+
             if not self.readme_content:
                 self._log_message("README.md não encontrado ou vazio.", "warning")
             return True
@@ -217,292 +226,342 @@ class GitHubPodcastGenerator:
             status_code = e.response.status_code if hasattr(e, 'response') and e.response is not None else 'N/A'
             self._log_message(f"Erro ao buscar estrutura do repositório (Status: {status_code}): {e}", "error")
             if status_code == 404:
-                 self._log_message(f"Verifique se o repositório '{self.repo_owner}/{self.repo_name}' e a branch '{self.branch}' existem.", "error")
+                 self._log_message(f"Verifique se o repo '{self.repo_owner}/{self.repo_name}' e a branch '{self.branch}' existem.", "error")
             elif status_code == 403:
-                 self._log_message("Erro 403: Limite de taxa da API do GitHub atingido ou token inválido/ausente para repositório privado.", "error")
+                 self._log_message("Erro 403: Limite de taxa da API GitHub ou token inválido/ausente.", "error")
             return False
         except Exception as e:
              self._log_message(f"Erro inesperado ao processar estrutura: {e}", "error")
              return False
 
     def _fetch_file_content_by_sha(self, sha, file_path):
-        """Busca e decodifica o conteúdo do arquivo usando o SHA do blob."""
+        """Busca e decodifica o conteúdo do arquivo usando o SHA, com limite aumentado."""
         api_url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/git/blobs/{sha}"
         try:
-            # Pequena pausa para evitar rate limiting agressivo
-            time.sleep(0.1)
             response = requests.get(api_url, headers=self.headers)
             response.raise_for_status()
-
             content_data = response.json()
-            if content_data.get("encoding") == "base64" and content_data.get("content"):
-                # Limitar tamanho do conteúdo decodificado para evitar problemas de memória/API
-                decoded_content = base64.b64decode(content_data["content"]).decode('utf-8', errors='replace')
-                return decoded_content[:15000] # Limite de caracteres por arquivo
-            return None # Retorna None se não for base64 ou não tiver conteúdo
 
-        except (requests.RequestException, json.JSONDecodeError, UnicodeDecodeError) as e:
+            if content_data.get("encoding") == "base64" and content_data.get("content"):
+                # Tratamento de erro na decodificação
+                try:
+                    decoded_content = base64.b64decode(content_data["content"]).decode('utf-8', errors='replace')
+                except Exception as decode_err:
+                    self._log_message(f"Erro ao decodificar {file_path}: {decode_err}", "warning")
+                    return None # Falha na decodificação
+
+                # --- ALTERAÇÃO: Limite de caracteres por arquivo aumentado ---
+                limited_content = decoded_content[:self.max_chars_per_file_read]
+                if len(decoded_content) > self.max_chars_per_file_read:
+                     self._log_message(f"Conteúdo do arquivo '{file_path}' truncado em {self.max_chars_per_file_read} caracteres.", "warning")
+                return limited_content
+                # --------------------------------------------------------
+            else:
+                 self._log_message(f"Arquivo '{file_path}' não está em base64 ou não tem conteúdo na resposta da API.", "warning")
+                 return None
+
+        except (requests.RequestException, json.JSONDecodeError) as e:
             self._log_message(f"Erro ao buscar conteúdo do arquivo '{file_path}': {e}", "warning")
             return None
         except Exception as e:
             self._log_message(f"Erro inesperado ao buscar conteúdo do arquivo '{file_path}': {e}", "warning")
             return None
 
-    # Métodos _fetch_file_content e _fetch_directory_content não são mais necessários com a API de Trees
-
     def analyze_repository(self):
         """Analisa o repositório e prepara dados para a IA."""
         if not self.code_files and not self.readme_content:
             self._log_message("Nenhum arquivo de código ou README para analisar.", "warning")
             return False
-
         self._log_message("Analisando conteúdo do repositório...", "info")
-
-        # 1. Extrair sumário do repositório a partir do README
         self._extract_repo_summary()
-
-        # 2. Analisar estrutura de código e padrões (contagem de linguagens)
         self._analyze_code_structure()
-
-        # 3. Identificar componentes chave e features (arquivos principais)
-        #    Esta parte pode ser melhorada pela IA, mas damos uma pista.
         self._identify_key_components()
-
         self._log_message("Análise inicial concluída.", "success")
         return True
 
     def _extract_repo_summary(self):
         """Extrai informações sumárias do README."""
-        self.repo_summary["title"] = f"{self.repo_name}" # Fallback title
+        self.repo_summary["title"] = f"{self.repo_name}"
         self.repo_summary["owner"] = self.repo_owner
         self.repo_summary["url"] = self.repo_url
         self.repo_summary["branch"] = self.branch
 
         if self.readme_content:
-            # Tenta extrair título H1 e primeira descrição significativa
             match_title = re.search(r'^#\s+(.*?)\n', self.readme_content, re.MULTILINE)
             if match_title:
                 self.repo_summary["title"] = match_title.group(1).strip()
 
-            # Tenta encontrar o primeiro parágrafo após o título (ou do início)
-            # Ignora badges (links que são imagens) comuns no início
-            content_after_title = re.sub(r'^#\s+.*?\n', '', self.readme_content, count=1) # Remove linha do título H1
-            content_cleaned = re.sub(r'^\[!\[.*?\]\(.*?\)\]\(.*?\)\s*?\n?', '', content_after_title, flags=re.MULTILINE) # Remove badges comuns
-            match_desc = re.search(r'^\s*(.*?)\n\n', content_cleaned, re.DOTALL) # Pega até o primeiro parágrafo duplo
+            content_after_title = re.sub(r'^#\s+.*?\n', '', self.readme_content, count=1)
+            content_cleaned = re.sub(r'^\[!\[.*?\]\(.*?\)\]\(.*?\)\s*?\n?', '', content_after_title, flags=re.MULTILINE)
+            match_desc = re.search(r'^\s*(.*?)\n\n', content_cleaned, re.DOTALL)
 
             if match_desc:
                 desc = match_desc.group(1).strip()
-                # Limpa múltiplos espaços/newlines e limita tamanho
                 desc_cleaned = ' '.join(desc.split())
-                self.repo_summary["description"] = textwrap.shorten(desc_cleaned, width=300, placeholder="...")
+                # Aumenta um pouco a descrição permitida
+                self.repo_summary["description"] = textwrap.shorten(desc_cleaned, width=500, placeholder="...")
             else:
-                 # Fallback: pega as primeiras linhas do README limpo
-                 fallback_desc = '\n'.join(content_cleaned.strip().splitlines()[:3])
-                 self.repo_summary["description"] = textwrap.shorten(fallback_desc, width=300, placeholder="...")
+                 fallback_desc = '\n'.join(content_cleaned.strip().splitlines()[:5])
+                 self.repo_summary["description"] = textwrap.shorten(fallback_desc, width=500, placeholder="...")
         else:
             self.repo_summary["description"] = f"Um repositório GitHub de {self.repo_owner} sem README.md detalhado."
 
         self._log_message(f"Título: {self.repo_summary['title']}", "info")
         self._log_message(f"Descrição: {self.repo_summary['description']}", "info")
 
-
     def _analyze_code_structure(self):
         """Analisa os arquivos de código e sua estrutura."""
         self.repo_summary["languages"] = {}
         self.repo_summary["file_count"] = len(self.code_files)
-        total_code_files_with_content = 0
+        total_code_files_with_content = sum(1 for f in self.code_files if f.get("content"))
 
         for file in self.code_files:
-            # Conta apenas se tiver extensão (ignora arquivos como 'LICENSE')
             if file["extension"]:
-                ext = file["extension"][1:]  # Remove o ponto
+                ext = file["extension"][1:]
                 self.repo_summary["languages"][ext] = self.repo_summary["languages"].get(ext, 0) + 1
-                if file["content"] is not None:
-                    total_code_files_with_content +=1
 
-        # Ordena linguagens por frequência
         self.repo_summary["languages"] = dict(sorted(self.repo_summary["languages"].items(), key=lambda item: item[1], reverse=True))
         self._log_message(f"Linguagens detectadas: {self.repo_summary['languages']}", "info")
         self._log_message(f"{total_code_files_with_content} arquivos tiveram conteúdo carregado para análise.", "info")
 
-
     def _identify_key_components(self):
-        """Identifica componentes chave e arquivos importantes."""
-        # Esta função é simplista. A IA fará um trabalho melhor.
-        # Apenas identificamos arquivos comuns de entrada/configuração.
+        """Identifica componentes chave e arquivos importantes (heurística simples)."""
         key_files = []
         patterns = {
-            'config': ['config.', 'settings.', 'env', '.config', 'conf.', 'manifest.'],
-            'entry': ['main.', 'app.', 'index.', 'server.', 'run.', '__main__.'],
-            'build': ['package.json', 'requirements.txt', 'pom.xml', 'build.gradle', 'dockerfile', 'makefile', 'setup.py'],
-            'docs': ['contributing.md', 'license', 'code_of_conduct.md']
+            'config': ['config.', 'settings.', 'env', '.config', 'conf.', 'manifest.', 'docker-compose', 'values.yaml'],
+            'entry': ['main.', 'app.', 'index.', 'server.', 'run.', '__main__.', 'wsgi.', 'asgi.'],
+            'build': ['package.json', 'requirements.txt', 'pom.xml', 'build.gradle', 'dockerfile', 'makefile', 'setup.py', 'go.mod', 'cargo.toml'],
+            'docs': ['contributing.md', 'license', 'code_of_conduct.md', 'changelog.md'],
+            'test': ['test_', '_test.', '.spec.', '.test.'],
+            'workflow': ['.github/workflows', '.gitlab-ci.yml']
         }
+        # Adiciona mais alguns arquivos chave comuns
+        common_files = ['manage.py', 'vite.config.', 'webpack.config.', 'next.config.', 'nuxt.config.']
 
         for file in self.code_files:
             fn_lower = file["name"].lower()
-            matched = False
+            path_lower = file["path"].lower()
+            matched_type = None
+
+            # Verifica padrões por nome
             for type, prefixes in patterns.items():
                 for prefix in prefixes:
                     if fn_lower.startswith(prefix) or fn_lower == prefix:
-                        key_files.append({"path": file["path"], "type": type})
-                        matched = True
-                        break # Próximo arquivo
-                if matched:
-                    break
+                        matched_type = type
+                        break
+                if matched_type: break
 
-        self.repo_summary["key_files_guess"] = key_files[:10] # Limita a lista
+            # Verifica padrões por caminho (para workflows, testes)
+            if not matched_type:
+                 for type, prefixes in patterns.items():
+                     for prefix in prefixes:
+                          if prefix in path_lower: # Verifica se o prefixo está no caminho
+                               if type == 'test' and 'test' in path_lower.split('/'): matched_type = type
+                               elif type == 'workflow' and '.github/workflows' in path_lower : matched_type = type
+                               break
+                     if matched_type: break
+
+            # Verifica arquivos comuns exatos
+            if not matched_type:
+                 if fn_lower in common_files:
+                     matched_type = 'entry/config' # Categoria genérica
+
+            if matched_type:
+                 key_files.append({"path": file["path"], "type": matched_type})
+
+        # Limita a lista enviada no sumário (mas a IA terá acesso a mais arquivos no contexto)
+        self.repo_summary["key_files_guess"] = key_files[:20]
         self._log_message(f"Possíveis arquivos chave identificados: {[f['path'] for f in self.repo_summary['key_files_guess']]}", "info")
 
     def generate_podcast_script(self, progress_callback=None):
-        """Gera o script do podcast usando a API Gemini."""
-        self._log_message("Gerando script do podcast com Gemini...", "info")
+        """Gera o script DETALHADO do podcast usando o modelo Gemini de contexto longo."""
+        self._log_message(f"Gerando script DETALHADO do podcast com {self.gemini_model_name}...", "info")
 
         if not self.gemini_api_key:
             self._log_message("API Key da Gemini não configurada. Gerando script de exemplo.", "error")
             return self._generate_stub_podcast_script()
 
-        # Preparar dados para a IA Gemini
-        # Inclui resumo, README (limitado) e trechos de código (limitados)
-        # Foca nos arquivos com conteúdo carregado
-        code_snippets = []
-        chars_so_far = 0
-        max_chars_code = 15000 # Limite de caracteres para trechos de código no prompt
+        # --- ALTERAÇÃO: Preparação de dados para IA com limites maiores ---
+        if progress_callback: progress_callback(0.65, "Preparando dados para IA (contexto amplo)...")
 
-        files_with_content = [f for f in self.code_files if f.get('content')]
-        # Priorizar arquivos chave, se identificados
         key_file_paths = [kf['path'] for kf in self.repo_summary.get('key_files_guess', [])]
-        sorted_files = sorted(files_with_content, key=lambda f: 0 if f['path'] in key_file_paths else 1)
+        files_with_content = sorted(
+            [f for f in self.code_files if f.get('content')],
+            key=lambda f: (0 if f['path'] in key_file_paths else 1, f['path'])
+        )
 
+        code_snippets_for_ai = []
+        total_code_chars_collected = 0
 
-        for file in sorted_files:
-            content_snippet = file['content'][:1000] # Pega os primeiros 1000 chars de cada arquivo relevante
-            if chars_so_far + len(content_snippet) < max_chars_code:
-                code_snippets.append({
+        self._log_message(f"Tentando incluir até ~{self.max_total_code_chars_for_ai / 1000:.0f}k caracteres de código no prompt para a IA.", "info")
+
+        for file in files_with_content:
+            content_to_add = file['content'] # Usa o conteúdo já limitado na leitura (max_chars_per_file_read)
+            # Verifica se adicionar este arquivo não estoura o limite TOTAL para código
+            if total_code_chars_collected + len(content_to_add) <= self.max_total_code_chars_for_ai:
+                code_snippets_for_ai.append({
                     "path": file["path"],
-                    "content_snippet": content_snippet
+                    # Não precisa truncar aqui, já foi truncado na leitura
+                    "content": content_to_add
                 })
-                chars_so_far += len(content_snippet)
+                total_code_chars_collected += len(content_to_add)
             else:
-                self._log_message(f"Limite de caracteres para trechos de código atingido ({max_chars_code}). Nem todos os arquivos incluídos no prompt.", "warning")
-                break # Para de adicionar trechos
+                # Se estourar o limite TOTAL, para de adicionar arquivos
+                self._log_message(f"Limite total de {self.max_total_code_chars_for_ai / 1000:.0f}k caracteres de código para IA atingido. {len(code_snippets_for_ai)}/{len(files_with_content)} arquivos com conteúdo incluídos no prompt.", "warning")
+                break
+
+        # Prepara o README, aplicando o limite específico para ele
+        readme_for_ai = self.readme_content[:self.max_readme_chars_for_ai]
+        if len(self.readme_content) > self.max_readme_chars_for_ai:
+             self._log_message(f"Conteúdo do README truncado em {self.max_readme_chars_for_ai} caracteres para a IA.", "warning")
+
+        # Prepara a lista completa de arquivos, aplicando o limite
+        all_files_list_for_ai = [f["path"] for f in self.code_files][:self.max_file_list_for_ai]
+        if len(self.code_files) > self.max_file_list_for_ai:
+             self._log_message(f"Lista de arquivos truncada em {self.max_file_list_for_ai} nomes para a IA.", "warning")
+
 
         repo_data_for_ai = {
+            "analysis_level": "detailed",
             "summary": self.repo_summary,
-            "readme_preview": self.readme_content[:3000] if self.readme_content else "README não disponível ou vazio.", # Limita tamanho do README
-            "code_snippets": code_snippets,
-            "all_files_list": [f["path"] for f in self.code_files][:100] # Lista de todos os arquivos (limitada)
+            "readme_content": readme_for_ai,
+            "code_files_analyzed_count": len(code_snippets_for_ai),
+            "code_files_analyzed": code_snippets_for_ai,
+            "all_files_list": all_files_list_for_ai
         }
+        # -----------------------------------------------------------------
 
-        # Prompt Detalhado para Gemini
+        # --- ALTERAÇÃO: Prompt atualizado para pedir mais detalhes (já definido anteriormente) ---
         prompt = f"""
-        Você é um Gerador de Roteiros de Podcast chamado 'Código Aberto Explica'. Sua missão é criar um roteiro de podcast **didático e engajador** em português do Brasil (pt-BR) explicando um repositório do GitHub para **desenvolvedores júnior**.
+        Você é um Gerador de Roteiros de Podcast EXTREMAMENTE DETALHISTA chamado 'Código Aberto Explica Profundamente'. Sua missão é criar um roteiro de podcast **técnico, aprofundado e didático** em português do Brasil (pt-BR) explicando um repositório do GitHub para **desenvolvedores que querem entender o código a fundo (nível júnior a pleno)**.
 
-        **Repositório Alvo:**
+        **Repositório Alvo:** (Informações básicas)
         - URL: {self.repo_url}
         - Proprietário: {self.repo_owner}
         - Nome: {self.repo_name}
         - Branch: {self.branch}
 
-        **Dados Coletados do Repositório (Resumo e Amostras):**
-        ```json
-        {json.dumps(repo_data_for_ai, indent=2, ensure_ascii=False)}
-        ```
+        **Dados Coletados do Repositório (Amplo Contexto Fornecido):**
+        Você recebeu um GRANDE volume de informações, incluindo o README e o conteúdo de DIVERSOS arquivos de código. Use este contexto amplo para fornecer uma análise detalhada. O JSON abaixo contém o resumo, o README (limitado a {len(readme_for_ai)} chars), uma lista com os nomes de até {len(all_files_list_for_ai)} arquivos, e o conteúdo detalhado de {len(code_snippets_for_ai)} arquivos de código (totalizando aproximadamente {total_code_chars_collected / 1000:.0f}k caracteres de código).
 
-        **Seu Roteiro de Podcast (Aproximadamente 5-7 minutos de fala):**
+        **Seu Roteiro de Podcast (Aproximadamente 10-15 minutos de fala - MAIS LONGO E DETALHADO):**
 
-        **Objetivo Principal:** Explicar o repositório de forma clara para um desenvolvedor júnior, focando em:
-        1.  **Propósito:** Qual problema o projeto resolve? Qual seu objetivo principal? (Use o README e o contexto).
-        2.  **Estrutura e Arquitetura:** Como o código está organizado? Quais são as pastas e arquivos principais? Qual a lógica geral? (Inferir da lista de arquivos e trechos).
-        3.  **Tecnologias Chave:** Quais linguagens, frameworks ou bibliotecas importantes são usadas? (Baseado nas extensões e trechos).
-        4.  **Para o Júnior:**
-            *   Quais **conceitos de programação** ou **tecnologias** um júnior **precisa entender** para começar a trabalhar com um código como este? (Ex: APIs REST, ORM, estado em React, etc.). Mencione 2-3 conceitos chave.
-            *   Como um júnior poderia **começar a construir algo similar**? Quais seriam os primeiros passos? (Ex: "Comece com um servidor web simples...", "Crie a estrutura básica de pastas...", "Defina os modelos de dados...").
-            *   Há alguma **boa prática** evidente no código (mesmo nas amostras) que vale a pena destacar? (Ex: Nomes de variáveis claros, comentários úteis, estrutura modular).
-        5.  **Como Aprender Mais:** Sugira como o ouvinte pode usar ou aprender com este repositório (Ex: "Clone o repo e tente rodar", "Leia a documentação", "Contribua com uma issue pequena").
+        **Objetivo Principal:** Destrinchar o repositório, aproveitando o extenso contexto de código fornecido. Vá além do superficial.
+        1.  **Propósito e Contexto:** Problema resolvido, nicho de aplicação, motivação (inferir do README e código).
+        2.  **Arquitetura Detalhada:** Padrões de projeto usados (MVC, Microservices, etc.?), fluxo de dados principal, como os componentes principais (identificados nos arquivos) interagem. **Cite arquivos e trechos de código específicos como exemplo.**
+        3.  **Tecnologias e Bibliotecas Chave:** Não apenas liste, mas explique *por que* você acha que foram escolhidas e *como* são usadas no contexto do projeto. Encontrou alguma configuração interessante?
+        4.  **Análise de Código Específica (Onde o contexto amplo brilha):**
+            *   Identifique 2-3 **algoritmos ou lógicas de negócio complexas/interessantes** presentes no código fornecido. Explique como funcionam.
+            *   Discuta a **qualidade do código**: boas práticas observadas (ou ausência delas), tratamento de erros, testes (se visíveis), estilo de código, modularidade. **Use exemplos dos arquivos analisados.**
+            *   Quais **conceitos avançados** um dev precisaria dominar para contribuir significativamente? (Ex: Concorrência, Injeção de Dependência, Design Patterns específicos, etc.).
+        5.  **Para o Aprendiz:**
+            *   Como um dev júnior/pleno pode **navegar e entender** essa base de código de forma eficaz? Sugira pontos de partida.
+            *   Quais partes do código são **bons exemplos didáticos** para aprender conceitos específicos?
+            *   Sugestões de **pequenas contribuições ou experimentos** que podem ser feitos no código para aprendizado.
 
         **Formato do Roteiro:**
-        *   Use [VINHETA DE ABERTURA] e [VINHETA DE ENCERRAMENTO].
-        *   Use [MÚSICA SUAVE DE FUNDO] para transições ou ênfase.
+        *   Use marcadores como [VINHETA DE ABERTURA], [VINHETA DE TRANSIÇÃO], [VINHETA DE ENCERRAMENTO].
         *   Indique o locutor como "LOCUTOR:".
-        *   Divida o conteúdo em seções lógicas (Introdução, Estrutura, Tecnologias, Dicas para Juniores, Conclusão).
-        *   A linguagem deve ser **acessível, clara e motivadora**, evitando jargões excessivos ou explicando-os brevemente.
-        *   **Seja criativo e didático!** Imagine que você está conversando com um colega júnior.
-        *   **Não invente detalhes não presentes nos dados.** Se a informação não está clara, admita ("Parece que...", "Pela estrutura, podemos inferir...").
-        *   **Foco no aspecto educacional para juniores.**
+        *   Estruture em seções claras (Introdução, Arquitetura, Tecnologias, Análise de Código, Dicas de Aprendizado, Conclusão).
+        *   Linguagem clara, mas **não tenha medo de ser técnico**. Explique termos complexos brevemente.
+        *   **Seja analítico e profundo.** Faça conexões entre diferentes partes do código.
+        *   **Priorize a precisão técnica** baseada no código fornecido.
 
-        **Comece o roteiro agora:**
+        **Comece o roteiro:**
         [VINHETA DE ABERTURA]
 
-        LOCUTOR: Olá, desenvolvedor e desenvolvedora! Bem-vindos ao Código Aberto Explica...
+        LOCUTOR: Olá, entusiastas do código! Bem-vindos ao Código Aberto Explica Profundamente...
         """
+        # -----------------------------------------------------------------
 
         try:
-            if progress_callback:
-                 progress_callback(0.8, "Gerando roteiro com a IA...") # Atualiza progresso antes da chamada
+            if progress_callback: progress_callback(0.8, f"Gerando roteiro DETALHADO com {self.gemini_model_name} (pode levar vários minutos)...")
 
+            # --- ALTERAÇÃO: Garantir que o modelo correto está sendo chamado ---
             model = genai.GenerativeModel(self.gemini_model_name)
+
+            # Calcular tamanho estimado do input total (aproximado)
+            prompt_chars = len(prompt)
+            data_chars = len(json.dumps(repo_data_for_ai)) # Tamanho real dos dados como string JSON
+            total_input_chars_est = prompt_chars + data_chars
+            self._log_message(f"Enviando prompt + dados (~{total_input_chars_est / 1000:.0f}k caracteres estimados) para {self.gemini_model_name}...", "info")
+
+            # A API do google.generativeai geralmente aceita uma lista de conteúdos
+            # Pode ser necessário ajustar dependendo de como a API lida com JSONs grandes
+            # Alternativa 1: Tudo no prompt (pode não ser ideal)
+            # response = model.generate_content(prompt + "\n\n```json\n" + json.dumps(repo_data_for_ai, indent=2) + "\n```", ...)
+            # Alternativa 2: Usar a estrutura de partes (melhor para multimodal, mas pode funcionar)
             response = model.generate_content(
-                prompt,
-                generation_config=self.generation_config,
-                safety_settings=self.safety_settings
-                )
+                 [prompt, json.dumps(repo_data_for_ai)], # Envia como partes separadas
+                 generation_config=self.generation_config,
+                 safety_settings=self.safety_settings
+            )
+            # -----------------------------------------------------------------
 
-            # Verifica se a resposta foi bloqueada por segurança
+            # Verifica se a resposta foi bloqueada por segurança ou outros motivos
             if not response.candidates:
-                 block_reason = response.prompt_feedback.block_reason if response.prompt_feedback else 'Desconhecido'
-                 self._log_message(f"Geração bloqueada pela API Gemini. Razão: {block_reason}", "error")
-                 # Tentar obter informações sobre a classificação de segurança, se disponíveis
-                 try:
-                     safety_ratings = response.prompt_feedback.safety_ratings
-                     self._log_message(f"Classificações de segurança: {safety_ratings}", "warning")
-                 except Exception:
-                     pass # Ignora se não conseguir obter detalhes
-                 return self._generate_stub_podcast_script("Erro: Conteúdo bloqueado pela política de segurança da IA.")
-
+                 block_reason = "Desconhecido"
+                 safety_ratings_str = "N/A"
+                 if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
+                     block_reason = response.prompt_feedback.block_reason
+                     try:
+                         safety_ratings_str = str(response.prompt_feedback.safety_ratings)
+                     except Exception: pass # Ignora se não conseguir obter
+                 self._log_message(f"Geração bloqueada pela API Gemini ({self.gemini_model_name}). Razão: {block_reason}", "error")
+                 self._log_message(f"Classificações de segurança do prompt: {safety_ratings_str}", "warning")
+                 return self._generate_stub_podcast_script(f"Erro: Conteúdo bloqueado pela política de segurança da IA ({self.gemini_model_name}). Razão: {block_reason}")
 
             # Extrai o texto da resposta
-            script = response.text
+            script = response.text # Assumindo que a resposta virá em .text
 
-            # Adiciona metadados ao final
             script += f"""
             \n\n---\n
             [VINHETA DE ENCERRAMENTO]\n
-            Roteiro gerado por Código Aberto Explica (usando Google Gemini).
+            Roteiro DETALHADO gerado por Código Aberto Explica Profundamente (usando {self.gemini_model_name}).
             Repositório analisado: {self.repo_url}
             """
 
-            self._log_message("Script do podcast gerado com sucesso!", "success")
-            if progress_callback:
-                 progress_callback(0.9, "Roteiro gerado!")
+            self._log_message("Script DETALHADO do podcast gerado com sucesso!", "success")
+            if progress_callback: progress_callback(0.9, "Roteiro detalhado gerado!")
             return script.strip()
 
         except Exception as e:
-            self._log_message(f"Erro ao gerar script com Gemini: {e}", "error")
-            # Tenta fornecer mais detalhes se for um erro da API
-            if hasattr(e, 'response'):
-                 self._log_message(f"Detalhes do erro da API: {e.response.text}", "error")
-            return self._generate_stub_podcast_script(f"Erro na comunicação com a API Gemini: {e}")
+             # Tentar capturar erros específicos da API do Gemini se disponíveis
+             # (Ex: ResourceExhaustedError, InvalidArgumentError etc., dependendo da lib)
+             self._log_message(f"Erro ao gerar script com {self.gemini_model_name}: {e}", "error")
+             if "429" in str(e) or "ResourceExhaustedError" in str(e): # Exemplo de verificação
+                 self._log_message("Erro 429: Limite de taxa da API Gemini atingido. Tente novamente mais tarde.", "error")
+             elif "API key not valid" in str(e):
+                  self._log_message("Erro: API Key da Gemini inválida.", "error")
 
-    def _generate_stub_podcast_script(self, error_message="API indisponível"):
+             # Log detalhado do erro
+             import traceback
+             self._log_message(traceback.format_exc(), "error")
+
+             # Retorna um stub que menciona a falha com o modelo grande
+             return self._generate_stub_podcast_script(f"Erro na comunicação com o modelo experimental {self.gemini_model_name}: {e}")
+
+    def _generate_stub_podcast_script(self, error_message="API indisponível ou erro na geração"):
         """Gera um script de exemplo quando a API falha."""
         self._log_message(f"Gerando script de exemplo devido a erro: {error_message}", "warning")
         repo_title = self.repo_summary.get("title", self.repo_name)
         main_language = next(iter(self.repo_summary.get("languages", {"código"}).keys()), "código")
+        model_name_mention = f" (tentativa com {self.gemini_model_name})" if "experimental" in error_message else ""
 
         return f"""
         [VINHETA DE ABERTURA]
 
-        LOCUTOR: Olá! Bem-vindos ao Código Aberto Explica! Hoje tivemos um pequeno problema técnico ({error_message}) para analisar profundamente o repositório {repo_title}, mas vamos dar uma olhada geral baseada nas informações que conseguimos!
+        LOCUTOR: Olá! Bem-vindos ao Código Aberto Explica! Hoje tivemos um problema técnico ao tentar gerar a análise{model_name_mention}: {error_message}. Vamos dar uma olhada geral com as informações básicas que temos.
 
-        [MÚSICA SUAVE DE FUNDO]
+        [VINHETA DE TRANSIÇÃO]
 
-        LOCUTOR: O repositório que íamos explorar hoje é o '{repo_title}', mantido por '{self.repo_owner}'. Pelo que vimos, parece ser um projeto escrito principalmente em {main_language}.
+        LOCUTOR: O repositório que estávamos explorando é o '{repo_title}', mantido por '{self.repo_owner}'. Ele parece ser escrito principalmente em {main_language}.
 
         LOCUTOR: A descrição sugere que o objetivo é: {self.repo_summary.get('description', 'Não foi possível carregar a descrição.')}
 
-        LOCUTOR: Como não conseguimos a análise completa da IA, a dica para o júnior hoje é: sempre comece explorando o README! Ele é o cartão de visitas do projeto. Depois, olhe a estrutura de pastas e tente rodar o projeto localmente, se possível.
+        LOCUTOR: Como não conseguimos a análise profunda da IA, a dica para hoje é: sempre comece pelo README! Depois, explore a estrutura de pastas e tente identificar os arquivos de configuração e pontos de entrada principais (como 'main.py', 'index.js', etc.).
 
-        LOCUTOR: Recomendamos que você mesmo dê uma olhada no link do repositório na descrição deste episódio!
+        LOCUTOR: Recomendamos que você mesmo navegue pelo repositório no link da descrição.
 
         [VINHETA DE ENCERRAMENTO]
         ---
@@ -514,16 +573,7 @@ class GitHubPodcastGenerator:
         """
         Gera o áudio do podcast, inserindo uma vinheta musical curta
         nos locais indicados por marcadores no script.
-
-        Args:
-            script_text (str): O roteiro completo gerado pela IA.
-            lang (str): Idioma para o gTTS.
-            vignette_path (str): Caminho para o arquivo de música da vinheta.
-            vignette_duration_ms (int): Duração desejada da vinheta em milissegundos.
-            progress_callback (callable, optional): Função para reportar progresso.
-
-        Returns:
-            io.BytesIO or None: Buffer de bytes com o áudio MP3 final ou None em caso de erro.
+        **Modificado para limpar melhor o texto antes de enviar ao TTS.**
         """
         self._log_message("Preparando áudio do podcast com vinhetas...", "info")
         if progress_callback:
@@ -532,15 +582,11 @@ class GitHubPodcastGenerator:
         # --- Carregar e preparar a vinheta ---
         try:
             vignette_full = AudioSegment.from_mp3(vignette_path)
-            # Pega apenas o início da música para a vinheta
             vignette = vignette_full[:vignette_duration_ms]
-            # Adiciona um pequeno fade out no final da vinheta (opcional, mas bom)
-            vignette = vignette.fade_out(duration=min(500, vignette_duration_ms // 4)) # Fade out de 0.5s ou 1/4 da duração
+            vignette = vignette.fade_out(duration=min(500, vignette_duration_ms // 4))
             self._log_message(f"Vinheta '{vignette_path}' carregada e cortada para {len(vignette)/1000:.1f}s.", "info")
         except FileNotFoundError:
             self._log_message(f"Arquivo de vinheta '{vignette_path}' não encontrado. Não será possível adicionar vinhetas.", "error")
-            # Poderíamos prosseguir sem vinhetas, mas vamos parar para indicar o erro claramente.
-            # return self._generate_audio_without_vignettes(script_text, lang, progress_callback) # Função alternativa (não implementada aqui)
             return None
         except Exception as e:
             self._log_message(f"Erro ao carregar ou processar vinheta '{vignette_path}': {e}. Verifique o arquivo e a instalação do ffmpeg.", "error")
@@ -548,15 +594,13 @@ class GitHubPodcastGenerator:
 
         # --- Processar o roteiro e gerar áudio ---
         final_segments = []
-        # Marcadores que indicam onde inserir a vinheta
         vignette_markers = [
             '[VINHETA DE ABERTURA]',
             '[MÚSICA SUAVE DE FUNDO]',
             '[SECTION BREAK]',
+            '[VINHETA DE TRANSIÇÃO]',
             '[VINHETA DE ENCERRAMENTO]'
         ]
-        # Regex para dividir o script mantendo os delimitadores (marcadores)
-        # Adiciona parênteses ao redor do padrão para capturá-lo no split
         marker_pattern = r'(' + '|'.join(re.escape(m) for m in vignette_markers) + r')'
         parts = [p.strip() for p in re.split(marker_pattern, script_text) if p and p.strip()]
 
@@ -570,9 +614,9 @@ class GitHubPodcastGenerator:
         try:
             for part in parts:
                 processed_parts += 1
-                current_progress = 0.95 + (0.04 * (processed_parts / total_parts)) # Progresso entre 95% e 99%
+                current_progress = 0.95 + (0.04 * (processed_parts / total_parts))
                 if progress_callback:
-                     progress_callback(current_progress, f"Processando parte {processed_parts}/{total_parts}...")
+                     progress_callback(current_progress, f"Processando áudio parte {processed_parts}/{total_parts}...")
 
                 is_marker = part in vignette_markers
 
@@ -580,27 +624,49 @@ class GitHubPodcastGenerator:
                     self._log_message(f"Adicionando vinheta para o marcador: {part}", "info")
                     final_segments.append(vignette)
                 else: # É um bloco de texto
-                    # Limpar o texto para o TTS
-                    text_to_speak = re.sub(r'^\s*(LOCUTOR:|HOST:)\s*', '', part, flags=re.MULTILINE)
-                    text_to_speak = re.sub(r'`', '', text_to_speak)
+                    # 1. Limpeza inicial (metadados, linhas vazias)
+                    text_to_speak = re.sub(r'---\n.*', '', part, flags=re.DOTALL).strip()
                     text_to_speak = "\n".join(line for line in text_to_speak.splitlines() if line.strip())
 
-                    if text_to_speak: # Só gera áudio se houver texto após limpar
+                    if not text_to_speak:
+                        continue # Pula se não sobrou texto útil
+
+                    # 2. Limpeza específica para TTS (REMOVER MARCADORES INDESEJADOS)
+                    # Remove **LOCUTOR:** ou LOCUTOR: (com ou sem asteriscos e espaços) no início das linhas
+                    text_to_speak = re.sub(r'^\s*(\*\*)*(LOCUTOR:|HOST:)(\*\*)*\s*', '', text_to_speak, flags=re.IGNORECASE | re.MULTILINE)
+                    # Remove asteriscos de negrito/itálico (**) ou (*)
+                    text_to_speak = re.sub(r'\*(\*?)(.*?)\1\*', r'\2', text_to_speak) # Remove **texto** ou *texto* deixando só 'texto'
+                    # Remove crases (backticks) usadas para código inline
+                    text_to_speak = re.sub(r'`', '', text_to_speak)
+                    # Remove cabeçalhos Markdown (#, ##, etc.) no início das linhas
+                    text_to_speak = re.sub(r'^\s*#+\s+', '', text_to_speak, flags=re.MULTILINE)
+                    # Remove possíveis marcadores de lista restantes (- , * , + ) no início de linha se não foram convertidos em frase
+                    text_to_speak = re.sub(r'^\s*[-*+]\s+', '', text_to_speak, flags=re.MULTILINE)
+
+                    # Limpa espaços extras que podem ter sido deixados pelas substituições
+                    text_to_speak = re.sub(r'\s+', ' ', text_to_speak).strip()
+
+                    if text_to_speak:
                         self._log_message(f"Gerando fala para: '{textwrap.shorten(text_to_speak, 50)}...'", "info")
                         try:
+                            # --- Geração de Fala ---
                             tts = gTTS(text=text_to_speak, lang=lang, slow=False)
                             speech_fp = io.BytesIO()
                             tts.write_to_fp(speech_fp)
                             speech_fp.seek(0)
 
-                            speech_segment = AudioSegment.from_mp3(speech_fp)
-                            final_segments.append(speech_segment)
-                            self._log_message(f"Segmento de fala gerado ({len(speech_segment)/1000:.1f}s).", "info")
+                            # --- Carregamento com Pydub ---
+                            try:
+                                speech_segment = AudioSegment.from_mp3(speech_fp)
+                                final_segments.append(speech_segment)
+                                self._log_message(f"Segmento de fala gerado ({len(speech_segment)/1000:.1f}s).", "info")
+                            except Exception as e_pydub:
+                                 self._log_message(f"Erro ao carregar segmento de fala com pydub: {e_pydub}. Verifique ffmpeg. Pulando segmento.", "warning")
+                                 continue
 
                         except Exception as e_tts:
-                            self._log_message(f"Erro ao gerar fala para um segmento com gTTS ou pydub: {e_tts}", "warning")
-                            # Decide se continua sem este segmento ou para
-                            continue # Pula este segmento de fala em caso de erro
+                            self._log_message(f"Erro ao gerar fala para um segmento com gTTS: {e_tts}", "warning")
+                            continue
 
             # --- Combinar todos os segmentos ---
             if not final_segments:
@@ -608,7 +674,6 @@ class GitHubPodcastGenerator:
                 return None
 
             self._log_message("Combinando segmentos de fala e vinhetas...", "info")
-            # Inicia com um segmento vazio para usar o operador +
             combined_audio = AudioSegment.empty()
             for segment in final_segments:
                  combined_audio += segment
@@ -624,7 +689,7 @@ class GitHubPodcastGenerator:
             return final_audio_fp
 
         except Exception as e:
-            self._log_message(f"Erro inesperado durante a concatenação de áudio: {e}", "error")
+            self._log_message(f"Erro inesperado durante a geração/concatenação de áudio: {e}", "error")
             import traceback
             self._log_message(traceback.format_exc(), "error")
             return None
