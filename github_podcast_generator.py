@@ -428,7 +428,7 @@ class GitHubPodcastGenerator:
 
         # --- ALTERAÇÃO PRINCIPAL: Prompt atualizado para concisão ---
         prompt = f"""
-        Você é um Gerador de Roteiros de Podcast chamado 'Código Aberto Explica Rápido'. Sua missão é criar um roteiro de podcast **conciso, objetivo e informativo** em português do Brasil (pt-BR) explicando os **pontos ESSENCIAIS** de um repositório do GitHub para desenvolvedores juniores a plenos que buscam uma **visão geral rápida e de qualidade**.
+        Você é um Gerador de Roteiros de Podcast chamado 'Explica Código'. Sua missão é criar um roteiro de podcast **conciso, objetivo e informativo** em português do Brasil (pt-BR) explicando os **pontos ESSENCIAIS** de um repositório do GitHub para desenvolvedores juniores a plenos que buscam uma **visão geral rápida e de qualidade**.
 
         **Repositório Alvo:** (Informações básicas)
         - URL: {self.repo_url}
@@ -462,7 +462,7 @@ class GitHubPodcastGenerator:
         **Comece o roteiro:**
         [VINHETA DE ABERTURA]
 
-        LOCUTOR: Olá, coders! Bem-vindos ao Código Aberto Explica Rápido...
+        LOCUTOR: Olá, coders! Bem-vindos ao Podcast Explica Código...
         """
         # -----------------------------------------------------------------
 
