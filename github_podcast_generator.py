@@ -374,14 +374,14 @@ class GitHubPodcastGenerator:
         self._log_message(f"Possíveis arquivos chave identificados: {[f['path'] for f in self.repo_summary['key_files_guess']]}", "info")
 
     def generate_podcast_script(self, progress_callback=None):
-        """Gera o script DETALHADO do podcast usando o modelo Gemini de contexto longo."""
-        self._log_message(f"Gerando script DETALHADO do podcast com {self.gemini_model_name}...", "info")
+        """Gera o script do podcast usando o modelo Gemini, focado em concisão e pontos chave."""
+        self._log_message(f"Gerando script CONCISO do podcast com {self.gemini_model_name}...", "info") # <-- Mudança no Log
 
         if not self.gemini_api_key:
             self._log_message("API Key da Gemini não configurada. Gerando script de exemplo.", "error")
             return self._generate_stub_podcast_script()
 
-        # --- ALTERAÇÃO: Preparação de dados para IA com limites maiores ---
+        # --- Preparação de dados para IA (mantém a mesma lógica de antes) ---
         if progress_callback: progress_callback(0.65, "Preparando dados para IA (contexto amplo)...")
 
         key_file_paths = [kf['path'] for kf in self.repo_summary.get('key_files_guess', [])]
@@ -396,44 +396,39 @@ class GitHubPodcastGenerator:
         self._log_message(f"Tentando incluir até ~{self.max_total_code_chars_for_ai / 1000:.0f}k caracteres de código no prompt para a IA.", "info")
 
         for file in files_with_content:
-            content_to_add = file['content'] # Usa o conteúdo já limitado na leitura (max_chars_per_file_read)
-            # Verifica se adicionar este arquivo não estoura o limite TOTAL para código
+            content_to_add = file['content']
             if total_code_chars_collected + len(content_to_add) <= self.max_total_code_chars_for_ai:
                 code_snippets_for_ai.append({
                     "path": file["path"],
-                    # Não precisa truncar aqui, já foi truncado na leitura
                     "content": content_to_add
                 })
                 total_code_chars_collected += len(content_to_add)
             else:
-                # Se estourar o limite TOTAL, para de adicionar arquivos
                 self._log_message(f"Limite total de {self.max_total_code_chars_for_ai / 1000:.0f}k caracteres de código para IA atingido. {len(code_snippets_for_ai)}/{len(files_with_content)} arquivos com conteúdo incluídos no prompt.", "warning")
                 break
 
-        # Prepara o README, aplicando o limite específico para ele
         readme_for_ai = self.readme_content[:self.max_readme_chars_for_ai]
         if len(self.readme_content) > self.max_readme_chars_for_ai:
              self._log_message(f"Conteúdo do README truncado em {self.max_readme_chars_for_ai} caracteres para a IA.", "warning")
 
-        # Prepara a lista completa de arquivos, aplicando o limite
         all_files_list_for_ai = [f["path"] for f in self.code_files][:self.max_file_list_for_ai]
         if len(self.code_files) > self.max_file_list_for_ai:
              self._log_message(f"Lista de arquivos truncada em {self.max_file_list_for_ai} nomes para a IA.", "warning")
 
 
         repo_data_for_ai = {
-            "analysis_level": "detailed",
+            "analysis_level": "concise_summary", # <-- Pode mudar o nível aqui se quiser
             "summary": self.repo_summary,
             "readme_content": readme_for_ai,
             "code_files_analyzed_count": len(code_snippets_for_ai),
-            "code_files_analyzed": code_snippets_for_ai,
+            "code_files_analyzed": code_snippets_for_ai, # <-- IA ainda recebe o código detalhado
             "all_files_list": all_files_list_for_ai
         }
         # -----------------------------------------------------------------
 
-        # --- ALTERAÇÃO: Prompt atualizado para pedir mais detalhes (já definido anteriormente) ---
+        # --- ALTERAÇÃO PRINCIPAL: Prompt atualizado para concisão ---
         prompt = f"""
-        Você é um Gerador de Roteiros de Podcast EXTREMAMENTE DETALHISTA chamado 'Código Aberto Explica Profundamente'. Sua missão é criar um roteiro de podcast **técnico, aprofundado e didático** em português do Brasil (pt-BR) explicando um repositório do GitHub para **desenvolvedores que querem entender o código a fundo (nível júnior a pleno)**.
+        Você é um Gerador de Roteiros de Podcast chamado 'Código Aberto Explica Rápido'. Sua missão é criar um roteiro de podcast **conciso, objetivo e informativo** em português do Brasil (pt-BR) explicando os **pontos ESSENCIAIS** de um repositório do GitHub para desenvolvedores juniores a plenos que buscam uma **visão geral rápida e de qualidade**.
 
         **Repositório Alvo:** (Informações básicas)
         - URL: {self.repo_url}
@@ -442,63 +437,53 @@ class GitHubPodcastGenerator:
         - Branch: {self.branch}
 
         **Dados Coletados do Repositório (Amplo Contexto Fornecido):**
-        Você recebeu um GRANDE volume de informações, incluindo o README e o conteúdo de DIVERSOS arquivos de código. Use este contexto amplo para fornecer uma análise detalhada. O JSON abaixo contém o resumo, o README (limitado a {len(readme_for_ai)} chars), uma lista com os nomes de até {len(all_files_list_for_ai)} arquivos, e o conteúdo detalhado de {len(code_snippets_for_ai)} arquivos de código (totalizando aproximadamente {total_code_chars_collected / 1000:.0f}k caracteres de código).
+        Você recebeu um GRANDE volume de informações (README, lista de arquivos, conteúdo detalhado de {len(code_snippets_for_ai)} arquivos totalizando ~{total_code_chars_collected / 1000:.0f}k caracteres). **Use este contexto amplo para SINTETIZAR e extrair os aspectos MAIS IMPORTANTES.** Não precisa detalhar tudo, foque no que é crucial para entender o projeto rapidamente.
+        
 
-        **Seu Roteiro de Podcast (Aproximadamente 10-15 minutos de fala - MAIS LONGO E DETALHADO):**
+        **Seu Roteiro de Podcast (Aproximadamente 5-7 minutos de fala - CONCISO E DIRETO). IMPORTANTE: não precisa colocar no roteiro instruções que você seguiu para criar o podcast e nem o tempo que irá levar.**
 
-        **Objetivo Principal:** Destrinchar o repositório, aproveitando o extenso contexto de código fornecido. Vá além do superficial.
-        1.  **Propósito e Contexto:** Problema resolvido, nicho de aplicação, motivação (inferir do README e código).
-        2.  **Arquitetura Detalhada:** Padrões de projeto usados (MVC, Microservices, etc.?), fluxo de dados principal, como os componentes principais (identificados nos arquivos) interagem. **Cite arquivos e trechos de código específicos como exemplo.**
-        3.  **Tecnologias e Bibliotecas Chave:** Não apenas liste, mas explique *por que* você acha que foram escolhidas e *como* são usadas no contexto do projeto. Encontrou alguma configuração interessante?
-        4.  **Análise de Código Específica (Onde o contexto amplo brilha):**
-            *   Identifique 2-3 **algoritmos ou lógicas de negócio complexas/interessantes** presentes no código fornecido. Explique como funcionam.
-            *   Discuta a **qualidade do código**: boas práticas observadas (ou ausência delas), tratamento de erros, testes (se visíveis), estilo de código, modularidade. **Use exemplos dos arquivos analisados.**
-            *   Quais **conceitos avançados** um dev precisaria dominar para contribuir significativamente? (Ex: Concorrência, Injeção de Dependência, Design Patterns específicos, etc.).
-        5.  **Para o Aprendiz:**
-            *   Como um dev júnior/pleno pode **navegar e entender** essa base de código de forma eficaz? Sugira pontos de partida.
-            *   Quais partes do código são **bons exemplos didáticos** para aprender conceitos específicos?
-            *   Sugestões de **pequenas contribuições ou experimentos** que podem ser feitos no código para aprendizado.
+        **Objetivo Principal:** Apresentar os highlights do repositório de forma clara e direta, aproveitando o contexto fornecido para identificar o que realmente importa.
+        1.  **Propósito Principal:** Qual problema o projeto resolve? Qual seu objetivo central? (Seja direto, baseado no README e análise geral).
+        2.  **Visão Geral da Arquitetura:** Como o projeto está estruturado em alto nível? Mencione o principal padrão (se evidente) e como os componentes centrais se conectam *brevemente*. **Não precisa listar todos os arquivos.**
+        3.  **Tecnologias Chave:** Liste as 2-3 tecnologias *mais importantes* (linguagens, frameworks, libs) e explique *sucintamente* seu papel essencial no projeto.
+        4.  **Ponto Técnico de Destaque:** Escolha **UM** aspecto interessante do código ou da implementação (pode ser um algoritmo chave simplificado, uma boa prática notável, ou um desafio técnico principal abordado) e explique-o de forma acessível. **Use o código fornecido como base, mas resuma a ideia.**
+        5.  **Para o Aprendiz (Dicas Rápidas):**
+            *   Qual o melhor **ponto de partida** para explorar o código? (Ex: um arquivo principal, a pasta de componentes).
+            *   Que **conceito chave** o dev pode aprender observando este projeto?
 
         **Formato do Roteiro:**
         *   Use marcadores como [VINHETA DE ABERTURA], [VINHETA DE TRANSIÇÃO], [VINHETA DE ENCERRAMENTO].
         *   Indique o locutor como "LOCUTOR:".
-        *   Estruture em seções claras (Introdução, Arquitetura, Tecnologias, Análise de Código, Dicas de Aprendizado, Conclusão).
-        *   Linguagem clara, mas **não tenha medo de ser técnico**. Explique termos complexos brevemente.
-        *   **Seja analítico e profundo.** Faça conexões entre diferentes partes do código.
-        *   **Priorize a precisão técnica** baseada no código fornecido.
+        *   Estruture em seções claras (Introdução, Propósito, Arquitetura, Tecnologias, Destaque Técnico, Dicas, Conclusão).
+        *   Linguagem clara e objetiva. Evite jargões excessivos sem explicação rápida.
+        *   **Seja seletivo.** Foque na qualidade da informação essencial, não na quantidade.
+        *   **Priorize a precisão técnica** ao resumir, baseada no código fornecido.
 
         **Comece o roteiro:**
         [VINHETA DE ABERTURA]
 
-        LOCUTOR: Olá, entusiastas do código! Bem-vindos ao Código Aberto Explica Profundamente...
+        LOCUTOR: Olá, coders! Bem-vindos ao Código Aberto Explica Rápido...
         """
         # -----------------------------------------------------------------
 
         try:
-            if progress_callback: progress_callback(0.8, f"Gerando roteiro DETALHADO com {self.gemini_model_name} (pode levar vários minutos)...")
+            if progress_callback: progress_callback(0.8, f"Gerando roteiro CONCISO com {self.gemini_model_name}...")
 
-            # --- ALTERAÇÃO: Garantir que o modelo correto está sendo chamado ---
+            # --- Mesma lógica de chamada da API ---
             model = genai.GenerativeModel(self.gemini_model_name)
-
-            # Calcular tamanho estimado do input total (aproximado)
             prompt_chars = len(prompt)
-            data_chars = len(json.dumps(repo_data_for_ai)) # Tamanho real dos dados como string JSON
+            data_chars = len(json.dumps(repo_data_for_ai))
             total_input_chars_est = prompt_chars + data_chars
             self._log_message(f"Enviando prompt + dados (~{total_input_chars_est / 1000:.0f}k caracteres estimados) para {self.gemini_model_name}...", "info")
 
-            # A API do google.generativeai geralmente aceita uma lista de conteúdos
-            # Pode ser necessário ajustar dependendo de como a API lida com JSONs grandes
-            # Alternativa 1: Tudo no prompt (pode não ser ideal)
-            # response = model.generate_content(prompt + "\n\n```json\n" + json.dumps(repo_data_for_ai, indent=2) + "\n```", ...)
-            # Alternativa 2: Usar a estrutura de partes (melhor para multimodal, mas pode funcionar)
             response = model.generate_content(
-                 [prompt, json.dumps(repo_data_for_ai)], # Envia como partes separadas
+                 [prompt, json.dumps(repo_data_for_ai)],
                  generation_config=self.generation_config,
                  safety_settings=self.safety_settings
             )
-            # -----------------------------------------------------------------
+            # --------------------------------------
 
-            # Verifica se a resposta foi bloqueada por segurança ou outros motivos
+            # --- Mesma lógica de tratamento de resposta e erro ---
             if not response.candidates:
                  block_reason = "Desconhecido"
                  safety_ratings_str = "N/A"
@@ -506,40 +491,35 @@ class GitHubPodcastGenerator:
                      block_reason = response.prompt_feedback.block_reason
                      try:
                          safety_ratings_str = str(response.prompt_feedback.safety_ratings)
-                     except Exception: pass # Ignora se não conseguir obter
+                     except Exception: pass
                  self._log_message(f"Geração bloqueada pela API Gemini ({self.gemini_model_name}). Razão: {block_reason}", "error")
                  self._log_message(f"Classificações de segurança do prompt: {safety_ratings_str}", "warning")
                  return self._generate_stub_podcast_script(f"Erro: Conteúdo bloqueado pela política de segurança da IA ({self.gemini_model_name}). Razão: {block_reason}")
 
-            # Extrai o texto da resposta
-            script = response.text # Assumindo que a resposta virá em .text
+            script = response.text
 
             script += f"""
             \n\n---\n
             [VINHETA DE ENCERRAMENTO]\n
-            Roteiro DETALHADO gerado por Código Aberto Explica Profundamente (usando {self.gemini_model_name}).
+            Roteiro CONCISO gerado por Código Aberto Explica Rápido (usando {self.gemini_model_name}).
             Repositório analisado: {self.repo_url}
             """
 
-            self._log_message("Script DETALHADO do podcast gerado com sucesso!", "success")
-            if progress_callback: progress_callback(0.9, "Roteiro detalhado gerado!")
+            self._log_message("Script CONCISO do podcast gerado com sucesso!", "success") # <-- Mudança no Log
+            if progress_callback: progress_callback(0.9, "Roteiro conciso gerado!")
             return script.strip()
 
         except Exception as e:
-             # Tentar capturar erros específicos da API do Gemini se disponíveis
-             # (Ex: ResourceExhaustedError, InvalidArgumentError etc., dependendo da lib)
              self._log_message(f"Erro ao gerar script com {self.gemini_model_name}: {e}", "error")
-             if "429" in str(e) or "ResourceExhaustedError" in str(e): # Exemplo de verificação
+             if "429" in str(e) or "ResourceExhaustedError" in str(e):
                  self._log_message("Erro 429: Limite de taxa da API Gemini atingido. Tente novamente mais tarde.", "error")
              elif "API key not valid" in str(e):
                   self._log_message("Erro: API Key da Gemini inválida.", "error")
-
-             # Log detalhado do erro
              import traceback
              self._log_message(traceback.format_exc(), "error")
+             return self._generate_stub_podcast_script(f"Erro na comunicação com o modelo {self.gemini_model_name}: {e}")
 
-             # Retorna um stub que menciona a falha com o modelo grande
-             return self._generate_stub_podcast_script(f"Erro na comunicação com o modelo experimental {self.gemini_model_name}: {e}")
+    #
 
     def _generate_stub_podcast_script(self, error_message="API indisponível ou erro na geração"):
         """Gera um script de exemplo quando a API falha."""
